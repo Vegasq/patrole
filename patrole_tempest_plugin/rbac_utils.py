@@ -23,6 +23,7 @@ from oslo_utils import excutils
 from tempest import clients
 from tempest.common import credentials_factory as credentials
 from tempest import config
+from tempest.lib import exceptions
 
 from patrole_tempest_plugin import rbac_exceptions
 
@@ -52,10 +53,13 @@ class RbacUtils(object):
             credentials.get_configured_admin_credentials())
         if test_obj.get_identity_version() == 'v3':
             admin_roles_client = admin_mgr.roles_v3_client
+            admin_groups_client = admin_mgr.groups_client
         else:
             admin_roles_client = admin_mgr.roles_client
+            admin_groups_client = None
 
         self.admin_roles_client = admin_roles_client
+        self.admin_groups_client = admin_groups_client
         self._override_role(test_obj, False)
 
     admin_role_id = None
@@ -96,6 +100,7 @@ class RbacUtils(object):
                 # point in the test is not executed.
         """
         test_obj._set_override_role_called()
+        self._create_rbac_groups()
         self._override_role(test_obj, True)
         try:
             # Execute the test.
@@ -109,6 +114,7 @@ class RbacUtils(object):
             # This code block is always executed, no matter the result of the
             # test. Automatically switch back to the admin role for test clean
             # up.
+            self._delete_rbac_groups()
             self._override_role(test_obj, False)
 
     def _override_role(self, test_obj, toggle_rbac_role=False):
@@ -139,6 +145,20 @@ class RbacUtils(object):
             # Do not override roles if `target_role` already exists.
             if not role_already_present:
                 self._create_user_role_on_project(target_role)
+
+            if CONF.patrole.rbac_test_group:
+                group = self._get_rbac_group()
+                if group:
+                    if toggle_rbac_role:
+                        self.admin_groups_client.add_group_user(
+                            group["id"], self.user_id)
+                    else:
+                        try:
+                            self.admin_groups_client.delete_group_user(
+                                group["id"], self.user_id)
+                        except exceptions.NotFound:
+                            pass
+
         except Exception as exp:
             with excutils.save_and_reraise_exception():
                 LOG.exception(exp)
@@ -204,6 +224,57 @@ class RbacUtils(object):
                 self.project_id, self.user_id, role['id'])
 
         return False
+
+    def _get_rbac_group(self):
+        """Get group for test."""
+        rbac_test_group = CONF.patrole.rbac_test_group
+
+        groups = self.admin_groups_client.list_groups(name=rbac_test_group)
+        groups = [g for g in groups["groups"] if g["name"] == rbac_test_group]
+        if not groups:
+            return None
+        if len(groups) > 1:
+            # TODO(my5878) Create new in rbac_exceptions
+            raise Exception("Multiple groups with name %s found." %
+                            rbac_test_group)
+        return groups[0]
+
+    def _create_rbac_groups(self):
+        tpl = {
+            "member_group": ["tenant_neutron_create", "tenant_neutron_update",
+                             "tenant_neutron_read", "tenant_neutron_delete"],
+            "admin_group": ["admin_neutron_create", "admin_neutron_update",
+                            "admin_neutron_read", "admin_neutron_delete"]
+        }
+        for group_name, roles in tpl.items():
+            try:
+                group = self.admin_groups_client.create_group(
+                    name=group_name)
+            except exceptions.Conflict:
+                group = self.admin_groups_client.list_groups(
+                    name=group_name)
+
+            for role in roles:
+                try:
+                    self.admin_roles_client.create_role(name=role)
+                except exceptions.Conflict:
+                    pass
+
+    def _delete_rbac_groups(self):
+        tpl = {
+            "member_group": ["tenant_neutron_create", "tenant_neutron_update",
+                             "tenant_neutron_read", "tenant_neutron_delete"],
+            "admin_group": ["admin_neutron_create", "admin_neutron_update",
+                            "admin_neutron_read", "admin_neutron_delete"]
+        }
+        for group_name, roles in tpl.items():
+            for role in roles:
+                role_id = self.admin_roles_client.list_roles(
+                    name=role)["roles"][0]["id"]
+                self.admin_roles_client.delete_role(role_id)
+            group_id = self.admin_groups_client.list_groups(
+                name=group_name)["groups"][0]["id"]
+            self.admin_groups_client.delete_group(group_id)
 
 
 class RbacUtilsMixin(object):
