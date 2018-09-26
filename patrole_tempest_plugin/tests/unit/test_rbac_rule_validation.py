@@ -47,7 +47,7 @@ class BaseRBACRuleValidationTest(base.TestCase):
         setattr(self.mock_test_args.os_primary, 'credentials', mock_creds)
 
         self.useFixture(
-            patrole_fixtures.ConfPatcher(rbac_test_role='Member',
+            patrole_fixtures.ConfPatcher(rbac_test_roles=['member'],
                                          group='patrole'))
         # Disable patrole log for unit tests.
         self.useFixture(
@@ -118,8 +118,8 @@ class RBACRuleValidationTest(BaseRBACRuleValidationTest):
         def test_policy(*args):
             raise exceptions.Forbidden()
 
-        test_re = ("Role Member was not allowed to perform the following "
-                   "actions: \[%s\].*" % (mock.sentinel.action))
+        test_re = ("Role \['member'\] was not allowed to perform the "
+                   "following actions: \[%s\].*" % (mock.sentinel.action))
         self.assertRaisesRegex(
             rbac_exceptions.RbacUnderPermissionException, test_re, test_policy,
             self.mock_test_args)
@@ -159,11 +159,10 @@ class RBACRuleValidationTest(BaseRBACRuleValidationTest):
         def test_policy(*args):
             raise rbac_exceptions.RbacMalformedResponse()
 
-        test_re = ("Role Member was not allowed to perform the following "
-                   "actions: \[%s\].*" % (mock.sentinel.action))
-        self.assertRaisesRegex(
-            rbac_exceptions.RbacUnderPermissionException, test_re, test_policy,
-            self.mock_test_args)
+        test_re = ("Role \['member'\] was not allowed to perform the "
+                   "following actions: \[%s\]. " % (mock.sentinel.action))
+        self.assertRaisesRegex(rbac_exceptions.RbacUnderPermissionException,
+                               test_re, test_policy, self.mock_test_args)
         self.assertRegex(mock_log.error.mock_calls[0][1][0], test_re)
 
     @mock.patch.object(rbac_rv, 'LOG', autospec=True)
@@ -201,11 +200,10 @@ class RBACRuleValidationTest(BaseRBACRuleValidationTest):
         def test_policy(*args):
             raise rbac_exceptions.RbacConflictingPolicies()
 
-        test_re = ("Role Member was not allowed to perform the following "
-                   "actions: \[%s\].*" % (mock.sentinel.action))
-        self.assertRaisesRegex(
-            rbac_exceptions.RbacUnderPermissionException, test_re, test_policy,
-            self.mock_test_args)
+        test_re = ("Role \['member'\] was not allowed to perform the "
+                   "following actions: \[%s\]." % (mock.sentinel.action))
+        self.assertRaisesRegex(rbac_exceptions.RbacUnderPermissionException,
+                               test_re, test_policy, self.mock_test_args)
         self.assertRegex(mock_log.error.mock_calls[0][1][0], test_re)
 
     @mock.patch.object(rbac_rv, 'LOG', autospec=True)
@@ -256,7 +254,7 @@ class RBACRuleValidationTest(BaseRBACRuleValidationTest):
             raise exceptions.NotFound()
 
         expected_errors = [
-            ("Role Member was not allowed to perform the following "
+            ("Role \['member'\] was not allowed to perform the following "
              "actions: \['%s'\].*" % policy_names[0]),
             None
         ]
@@ -464,7 +462,7 @@ class RBACRuleValidationLoggingTest(BaseRBACRuleValidationTest):
         policy_authority = mock_authority.PolicyAuthority.return_value
         policy_authority.allowed.assert_called_with(
             mock.sentinel.action,
-            CONF.patrole.rbac_test_role)
+            CONF.patrole.rbac_test_roles)
 
         mock_log.error.assert_not_called()
 
@@ -496,14 +494,14 @@ class RBACRuleValidationLoggingTest(BaseRBACRuleValidationTest):
         policy_authority = mock_authority.PolicyAuthority.return_value
         policy_authority.allowed.assert_called_with(
             "foo",
-            CONF.patrole.rbac_test_role)
+            CONF.patrole.rbac_test_roles)
         policy_authority.allowed.reset_mock()
 
         test_bar_policy(self.mock_test_args)
         policy_authority = mock_authority.PolicyAuthority.return_value
         policy_authority.allowed.assert_called_with(
             "qux",
-            CONF.patrole.rbac_test_role)
+            CONF.patrole.rbac_test_roles)
 
         mock_log.error.assert_not_called()
 
@@ -544,7 +542,7 @@ class RBACRuleValidationTestMultiPolicy(BaseRBACRuleValidationTest):
     def _assert_policy_authority_called_with(self, rules, mock_authority):
         m_authority = mock_authority.PolicyAuthority.return_value
         m_authority.allowed.assert_has_calls([
-            mock.call(rule, CONF.patrole.rbac_test_role) for rule in rules
+            mock.call(rule, CONF.patrole.rbac_test_roles) for rule in rules
         ])
 
     @mock.patch.object(rbac_rv, 'policy_authority', autospec=True)
@@ -656,10 +654,10 @@ class RBACRuleValidationTestMultiPolicy(BaseRBACRuleValidationTest):
         mock_authority.PolicyAuthority.return_value.allowed\
             .return_value = True
 
-        error_re = ("Role Member was not allowed to perform the following "
-                    "actions: %s. Expected allowed actions: %s. Expected "
-                    "disallowed actions: []." % (rules, rules)).replace(
-                        '[', '\[').replace(']', '\]')
+        error_re = ("Role ['member'] was not allowed to perform the "
+                    "following actions: %s. Expected allowed actions: %s. "
+                    "Expected disallowed actions: []." % (rules, rules)
+                    ).replace('[', '\[').replace(']', '\]')
         self.assertRaisesRegex(
             rbac_exceptions.RbacUnderPermissionException, error_re,
             test_policy, self.mock_test_args)

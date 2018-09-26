@@ -200,6 +200,63 @@ class RBACUtilsTest(base.TestCase):
                                                    False)
 
 
+class RBACUtilsV3Test(base.TestCase):
+
+    def setUp(self):
+        super(RBACUtilsV3Test, self).setUp()
+        # Reset the role history after each test run to avoid validation
+        # errors between tests.
+        rbac_utils.RbacUtils.override_role_history = {}
+        self.rbac_utils = self.useFixture(
+            patrole_fixtures.RbacUtilsV3Fixture())
+
+    def test_override_role_to_admin_role(self):
+        self.rbac_utils.set_roles('admin')
+        self.rbac_utils.override_role()
+
+        mock_test_obj = self.rbac_utils.mock_test_obj
+        roles_client = self.rbac_utils.roles_v3_client
+        mock_time = self.rbac_utils.mock_time
+
+        roles_client.create_user_role_on_project.assert_called_once_with(
+            self.rbac_utils.PROJECT_ID, self.rbac_utils.USER_ID, 'admin_id')
+        mock_test_obj.get_auth_providers()[0].clear_auth\
+            .assert_called_once_with()
+        mock_test_obj.get_auth_providers()[0].set_auth\
+            .assert_called_once_with()
+        mock_time.sleep.assert_called_once_with(1)
+
+    @mock.patch.object(rbac_utils.RbacUtils, '_override_role', autospec=True)
+    def test_override_role_context_manager_simulate_fail(self,
+                                                         mock_override_role):
+        """Validate that expected override_role calls are made when switching
+        to admin role for failure path (i.e. when test raises exception).
+        """
+        test_obj = mock.MagicMock()
+        _rbac_utils = rbac_utils.RbacUtils(test_obj)
+
+        # Validate constructor called _override_role with False.
+        mock_override_role.assert_called_once_with(_rbac_utils, test_obj,
+                                                   False)
+        mock_override_role.reset_mock()
+
+        def _do_test():
+            with _rbac_utils.override_role(test_obj):
+                # Validate `override_role` public method called private method
+                # `_override_role` with True.
+                mock_override_role.assert_called_once_with(
+                    _rbac_utils, test_obj, True)
+                mock_override_role.reset_mock()
+                # Raise exc to verify role switch works for negative case.
+                raise lib_exc.Forbidden()
+
+        # Validate that role is switched back to admin, despite test failure.
+        with testtools.ExpectedException(lib_exc.Forbidden):
+            _do_test()
+        mock_override_role.assert_called_once_with(_rbac_utils, test_obj,
+                                                   False)
+
+
 class RBACUtilsMixinTest(base.TestCase):
 
     def setUp(self):
@@ -211,6 +268,10 @@ class RBACUtilsMixinTest(base.TestCase):
             def setup_clients(cls):
                 super(FakeRbacTest, cls).setup_clients()
                 cls.setup_rbac_utils()
+
+            @classmethod
+            def _setup_group(cls):
+                pass
 
             def runTest(self):
                 pass

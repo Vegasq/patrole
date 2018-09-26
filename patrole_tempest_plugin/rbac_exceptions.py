@@ -95,3 +95,11 @@ class RbacOverrideRoleException(BasePatroleException):
     * an exception is raised after ``override_role`` context
     """
     message = "Override role failure or incorrect usage"
+
+
+class RbacRoleNotFound(BasePatroleException):
+    message = "Role %(role)s not found."
+
+
+class RbacDuplicateRoleName(BasePatroleException):
+    message = "Found more than a single role with name %(role)s."

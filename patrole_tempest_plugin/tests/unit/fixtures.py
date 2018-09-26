@@ -66,7 +66,8 @@ class RbacUtilsFixture(fixtures.Fixture):
     def setUp(self):
         super(RbacUtilsFixture, self).setUp()
 
-        self.useFixture(ConfPatcher(rbac_test_role='member', group='patrole'))
+        self.useFixture(ConfPatcher(rbac_test_roles=['member'],
+                                    group='patrole'))
         self.useFixture(ConfPatcher(
             admin_role='admin', auth_version='v3', group='identity'))
 
@@ -90,8 +91,10 @@ class RbacUtilsFixture(fixtures.Fixture):
                           spec=object).start()
         mock_admin_mgr = mock.patch.object(
             clients, 'Manager', spec=clients.Manager,
-            roles_v3_client=mock.Mock(), roles_client=mock.Mock()).start()
+            roles_v3_client=mock.Mock(), roles_client=mock.Mock(),
+            groups_client=mock.Mock()).start()
         self.roles_v3_client = mock_admin_mgr.return_value.roles_v3_client
+        self.groups_client = mock_admin_mgr.return_value.groups_client
 
         self.set_roles(['admin', 'member'], [])
 
@@ -155,3 +158,42 @@ class RbacUtilsFixture(fixtures.Fixture):
         self.roles_v3_client.list_roles.return_value = available_roles
         self.roles_v3_client.list_user_roles_on_project.return_value = (
             available_project_roles)
+
+
+class RbacUtilsV3Fixture(RbacUtilsFixture):
+    def setUp(self):
+        super(RbacUtilsV3Fixture, self).setUp()
+        self.useFixture(ConfPatcher(force_group_based_rbac=True,
+                                    group='patrole'))
+        self.useFixture(ConfPatcher(rbac_test_roles=['member'],
+                                    group='patrole'))
+        self.useFixture(ConfPatcher(
+            admin_role='admin', auth_version='v3', group='identity'))
+
+        test_obj_kwargs = {
+            'os_primary.credentials.user_id': self.USER_ID,
+            'os_primary.credentials.tenant_id': self.PROJECT_ID,
+            'os_primary.credentials.project_id': self.PROJECT_ID,
+            'get_identity_version.return_value': 'v3',
+            'rbac_group_id': None
+        }
+        self.mock_test_obj = mock.Mock(
+            __name__='patrole_unit_test', spec=test.BaseTestCase,
+            os_primary=mock.Mock(),
+            get_auth_providers=mock.Mock(return_value=[mock.Mock()]),
+            **test_obj_kwargs)
+
+        # Mock out functionality that can't be used by unit tests. Mocking out
+        # time.sleep is a test optimization.
+        self.mock_time = mock.patch.object(
+            rbac_utils, 'time', __name__='mock_time', spec=time).start()
+        mock.patch.object(credentials, 'get_configured_admin_credentials',
+                          spec=object).start()
+        mock_admin_mgr = mock.patch.object(
+            clients, 'Manager', spec=clients.Manager,
+            roles_v3_client=mock.Mock(), roles_client=mock.Mock(),
+            groups_client=mock.Mock()).start()
+        self.roles_v3_client = mock_admin_mgr.return_value.roles_v3_client
+        self.admin_groups_client = mock_admin_mgr.return_value.groups_client
+
+        self.set_roles(['admin', 'member'], [])

@@ -50,7 +50,7 @@ def action(service,
 
     * an OpenStack service,
     * a policy action (``rule``) enforced by that service, and
-    * the test role defined by ``[patrole] rbac_test_role``
+    * the test roles defined by ``[patrole] rbac_test_roles``
 
     determines whether the test role has sufficient permissions to perform an
     API call that enforces the ``rule``.
@@ -152,7 +152,7 @@ def action(service,
                                                         expected_error_codes)
 
     def decorator(test_func):
-        role = CONF.patrole.rbac_test_role
+        roles = CONF.patrole.rbac_test_roles
 
         @functools.wraps(test_func)
         def wrapper(*args, **kwargs):
@@ -213,7 +213,7 @@ def action(service,
                     msg = ("Role %s was not allowed to perform the following "
                            "actions: %s. Expected allowed actions: %s. "
                            "Expected disallowed actions: %s." % (
-                               role, sorted(rules),
+                               roles, sorted(rules),
                                sorted(set(rules) - set(disallowed_rules)),
                                sorted(disallowed_rules)))
                     LOG.error(msg)
@@ -246,7 +246,7 @@ def action(service,
                     msg = (
                         "OverPermission: Role %s was allowed to perform the "
                         "following disallowed actions: %s" % (
-                            role, sorted(disallowed_rules)
+                            roles, sorted(disallowed_rules)
                         )
                     )
                     LOG.error(msg)
@@ -357,7 +357,7 @@ def _is_authorized(test_obj, service, rule, extra_target_data):
         LOG.error(msg)
         raise rbac_exceptions.RbacResourceSetupFailed(msg)
 
-    role = CONF.patrole.rbac_test_role
+    roles = CONF.patrole.rbac_test_roles
     # Test RBAC against custom requirements. Otherwise use oslo.policy.
     if CONF.patrole.test_custom_requirements:
         authority = requirements_authority.RequirementsAuthority(
@@ -368,14 +368,14 @@ def _is_authorized(test_obj, service, rule, extra_target_data):
         authority = policy_authority.PolicyAuthority(
             project_id, user_id, service,
             extra_target_data=formatted_target_data)
-    is_allowed = authority.allowed(rule, role)
+    is_allowed = authority.allowed(rule, roles)
 
     if is_allowed:
         LOG.debug("[Policy action]: %s, [Role]: %s is allowed!", rule,
-                  role)
+                  roles)
     else:
         LOG.debug("[Policy action]: %s, [Role]: %s is NOT allowed!",
-                  rule, role)
+                  rule, roles)
 
     return is_allowed
 

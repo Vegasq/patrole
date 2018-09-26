@@ -22,8 +22,20 @@ patrole_group = cfg.OptGroup(name='patrole', title='Patrole Testing Options')
 PatroleGroup = [
     cfg.StrOpt('rbac_test_role',
                default='admin',
+               deprecated_for_removal=True,
+               deprecated_reason="""This option is deprecated and being
+replaced with ``rbac_test_roles``.
+""",
                help="""The current RBAC role against which to run
 Patrole tests."""),
+    cfg.ListOpt('rbac_test_roles',
+                help="""The current RBAC roles to be assigned to Keystone
+Group against which to run Patrole tests.""",
+                default=[]),
+    cfg.BoolOpt('force_group_based_rbac',
+                help="""Forces Patrole to use groups based validation even
+if for a single role.""",
+                default=False),
     cfg.ListOpt('custom_policy_files',
                 default=['/etc/%s/policy.json'],
                 help="""List of the paths to search for policy files. Each

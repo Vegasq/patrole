@@ -23,6 +23,8 @@ from oslo_utils import excutils
 from tempest import clients
 from tempest.common import credentials_factory as credentials
 from tempest import config
+from tempest.lib.common.utils import data_utils
+from tempest.lib import exceptions
 
 from patrole_tempest_plugin import rbac_exceptions
 
@@ -39,7 +41,7 @@ class RbacUtils(object):
     up, and primary credentials, needed to perform the API call which does
     policy enforcement. The primary credentials always cycle between roles
     defined by ``CONF.identity.admin_role`` and
-    ``CONF.patrole.rbac_test_role``.
+    ``CONF.patrole.rbac_test_roles``.
     """
 
     def __init__(self, test_obj):
@@ -52,10 +54,18 @@ class RbacUtils(object):
             credentials.get_configured_admin_credentials())
         if test_obj.get_identity_version() == 'v3':
             admin_roles_client = admin_mgr.roles_v3_client
+            admin_groups_client = admin_mgr.groups_client
         else:
             admin_roles_client = admin_mgr.roles_client
+            admin_groups_client = None
 
         self.admin_roles_client = admin_roles_client
+        self.admin_groups_client = admin_groups_client
+
+        self.user_id = test_obj.os_primary.credentials.user_id
+        self.project_id = test_obj.os_primary.credentials.tenant_id
+
+        # Change default role to admin
         self._override_role(test_obj, False)
 
     admin_role_id = None
@@ -67,7 +77,7 @@ class RbacUtils(object):
 
         Temporarily change the role used by ``os_primary`` credentials to:
 
-        * ``[patrole] rbac_test_role`` before test execution
+        * ``[patrole] rbac_test_roles`` before test execution
         * ``[identity] admin_role`` after test execution
 
         Automatically switches to admin role after test execution.
@@ -111,7 +121,7 @@ class RbacUtils(object):
             # up.
             self._override_role(test_obj, False)
 
-    def _override_role(self, test_obj, toggle_rbac_role=False):
+    def _override_role_v2(self, test_obj, toggle_rbac_role=False):
         """Private helper for overriding ``os_primary`` Tempest credentials.
 
         :param test_obj: instance of :py:class:`tempest.test.BaseTestCase`
@@ -157,13 +167,106 @@ class RbacUtils(object):
             for provider in auth_providers:
                 provider.set_auth()
 
+    def _override_role_v3(self, test_obj, toggle_rbac_role=False):
+        """Private helper for overriding ``os_primary`` Tempest credentials.
+
+        :param test_obj: instance of :py:class:`tempest.test.BaseTestCase`
+        :param toggle_rbac_role: Boolean value that controls the role that
+            overrides default role of ``os_primary`` credentials.
+            * If True: assign user to group with ``[patrole] rbac_test_roles``
+            roles.
+            * If False: role is set to ``[identity] admin_role``
+        """
+
+        try:
+            if toggle_rbac_role:
+                self._clear_user_roles_on_project()
+            else:
+                self._assign_admin_role_on_user()
+
+            self._override_group(toggle_rbac_role, test_obj.rbac_group_id)
+        except Exception as exp:
+            with excutils.save_and_reraise_exception():
+                LOG.exception(exp)
+        finally:
+            # Fernet tokens are not subsecond aware so sleep to ensure we are
+            # passing the second boundary before attempting to authenticate.
+            # Sleep since a token revocation occurred as a result of role
+            # overriding.
+            time.sleep(1)
+
+            auth_providers = test_obj.get_auth_providers()
+            for provider in auth_providers:
+                provider.clear_auth()
+
+            for provider in auth_providers:
+                provider.set_auth()
+
+    def _override_role(self, test_obj, toggle_rbac_role=False):
+        is_multi_roles = len(CONF.patrole.rbac_test_roles) > 1
+        is_v3 = test_obj.get_identity_version() == 'v3'
+        is_forced_v3 = CONF.patrole.force_group_based_rbac
+
+        # To involve group based RBAC we expect v3 to be enabled and either:
+        #  - CONF.patrole.rbac_test_roles to have more than a single role
+        #  - CONF.patrole.force_group_based_rbac to be explisitly specifyed
+        if is_v3 and is_forced_v3 or is_v3 and is_multi_roles:
+            self._override_role_v3(test_obj, toggle_rbac_role)
+        else:
+            self._override_role_v2(test_obj, toggle_rbac_role)
+
+    def _assign_admin_role_on_user(self):
+        """Assign admin role on tempest user."""
+        admin_roles = self.admin_roles_client.list_roles(
+            name=CONF.identity.admin_role)['roles']
+
+        if not admin_roles:
+            raise rbac_exceptions.RbacRoleNotFound(
+                role=CONF.identity.admin_role)
+        if len(admin_roles) > 1:
+            raise rbac_exceptions.RbacDuplicateRoleName(
+                role=CONF.identity.admin_role)
+
+        admin_role_id = admin_roles[0]['id']
+        self.admin_roles_client.create_user_role_on_project(
+            self.project_id, self.user_id, admin_role_id)
+
+    def _clear_user_roles_on_project(self):
+        """Clean tempest user from any pre-assigned roles."""
+        roles = self.admin_roles_client.list_user_roles_on_project(
+            self.project_id, self.user_id)['roles']
+
+        current_roles = [r["id"] for r in roles]
+        for role_id in current_roles:
+            self.admin_roles_client.delete_role_from_user_on_project(
+                self.project_id, self.user_id, role_id)
+
+    def _override_group(self, toggle_rbac_role, rbac_group_id):
+        """If ``toggle_rbac_role == True``, add tempest user to
+        ``self.rbac_group_id`` group.
+        If ``toggle_rbac_role == False``, remove tempest user from
+        ``self.rbac_group_id`` group.
+        """
+        groups_cln = self.admin_groups_client
+
+        if toggle_rbac_role:
+            if rbac_group_id:
+                groups_cln.add_group_user(rbac_group_id, self.user_id)
+        else:
+            try:
+                groups_cln.delete_group_user(rbac_group_id, self.user_id)
+            except exceptions.NotFound:
+                pass
+
     def _get_roles_by_name(self):
         available_roles = self.admin_roles_client.list_roles()['roles']
         role_map = {r['name']: r['id'] for r in available_roles}
         LOG.debug('Available roles: %s', list(role_map.keys()))
 
+        # TODO(vegasq) validate that v2 api supports only single role
+        rbac_test_role = CONF.patrole.rbac_test_roles[0]
         admin_role_id = role_map.get(CONF.identity.admin_role)
-        rbac_role_id = role_map.get(CONF.patrole.rbac_test_role)
+        rbac_role_id = role_map.get(rbac_test_role)
 
         if not all([admin_role_id, rbac_role_id]):
             missing_roles = []
@@ -173,7 +276,7 @@ class RbacUtils(object):
             if not admin_role_id:
                 missing_roles.append(CONF.identity.admin_role)
             if not rbac_role_id:
-                missing_roles.append(CONF.patrole.rbac_test_role)
+                missing_roles.append(rbac_test_role)
             msg += " Following roles were not found: %s." % (
                 ", ".join(missing_roles))
             msg += " Available roles: %s." % ", ".join(list(role_map.keys()))
@@ -233,6 +336,26 @@ class RbacUtilsMixin(object):
     # Shows if exception raised during override_role.
     __override_role_caught_exc = False
 
+    rbac_group_id = None
+
+    @classmethod
+    def _setup_group(cls):
+        roles_cln = cls.rbac_utils.admin_roles_client
+        groups_cln = cls.rbac_utils.admin_groups_client
+
+        # Create and save group for rbac tests
+        group = data_utils.rand_name("PatroleRbacGroup" +
+                                     cls.__class__.__name__)
+        cls.rbac_group_id = groups_cln.create_group(name=group)["group"]["id"]
+        cls.addClassResourceCleanup(groups_cln.delete_group, cls.rbac_group_id)
+
+        # Fill group with roles
+        for role in CONF.patrole.rbac_test_roles:
+            role_id = roles_cln.list_roles(name=role)["roles"][0]["id"]
+            roles_cln.create_group_role_on_project(
+                cls.os_primary.credentials.tenant_id, cls.rbac_group_id,
+                role_id)
+
     @classmethod
     def get_auth_providers(cls):
         """Returns list of auth_providers used within test.
@@ -245,6 +368,9 @@ class RbacUtilsMixin(object):
     @classmethod
     def setup_rbac_utils(cls):
         cls.rbac_utils = RbacUtils(cls)
+        # TODO(vegasq) drop once v2 support is ended
+        if cls.get_identity_version() == 'v3':
+            cls._setup_group()
 
     def _set_override_role_called(self):
         """Helper for tracking whether ``override_role`` was called."""
@@ -277,8 +403,8 @@ class RbacUtilsMixin(object):
 def is_admin():
     """Verifies whether the current test role equals the admin role.
 
-    :returns: True if ``rbac_test_role`` is the admin role.
+    :returns: True if ``rbac_test_roles`` contain the admin role.
     """
     # TODO(felipemonteiro): Make this more robust via a context is admin
     # lookup.
-    return CONF.patrole.rbac_test_role == CONF.identity.admin_role
+    return CONF.identity.admin_role in CONF.patrole.rbac_test_roles
