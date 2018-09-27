@@ -24,9 +24,10 @@ PatroleGroup = [
                default='admin',
                help="""The current RBAC role against which to run
 Patrole tests."""),
-    cfg.StrOpt('rbac_test_group',
-               default='',
-               help="""Group test user to be added to."""),
+    cfg.ListOpt('rbac_test_roles',
+                help="""The current RBAC roles to be assigned to Keystone
+Group against which to run Patrole tests.""",
+                default=[]),
     cfg.ListOpt('custom_policy_files',
                 default=['/etc/%s/policy.json'],
                 help="""List of the paths to search for policy files. Each
