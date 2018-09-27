@@ -66,6 +66,7 @@ class RbacUtils(object):
     admin_role_id = None
     rbac_role_id = None
     rbac_group_id = None
+    rbac_roles_cleanup = []
 
     @contextmanager
     def override_role(self, test_obj):
@@ -226,14 +227,21 @@ class RbacUtils(object):
             name=group_name)["group"]["id"]
 
         for role_name in CONF.patrole.rbac_test_roles:
-            role = self.admin_roles_client.create_role(name=role_name)
+            try:
+                role_id = self.admin_roles_client.create_role(
+                    name=role_name)["role"]["id"]
+                # Remove only roles we have created
+                rbac_roles_cleanup.append(role_id)
+            except exceptions.Conflict:
+                role_id = self.admin_roles_client.list_roles(
+                    name=role_name)["roles"][0]["id"]
+
             self.admin_roles_client.create_group_role_on_project(
-                self.project_id, self.rbac_group_id, role["role"]["id"])
+                self.project_id, self.rbac_group_id, role_id)
 
     def _delete_rbac_groups(self):
-        for role_name in CONF.patrole.rbac_test_roles:
-            roles = self.admin_roles_client.list_roles(name=role_name)
-            self.admin_roles_client.delete_role(roles["roles"][0]["id"])
+        for role_id in rbac_roles_cleanup:
+            self.admin_roles_client.delete_role(role_id)
 
         self.admin_groups_client.delete_group(self.rbac_group_id)
 
@@ -241,7 +249,11 @@ class RbacUtils(object):
         if toggle_rbac_role:
             self.admin_groups_client.add_group_user(group_id, self.user_id)
         else:
-            self.admin_groups_client.delete_group_user(group_id, self.user_id)
+            try:
+                self.admin_groups_client.delete_group_user(group_id,
+                                                           self.user_id)
+            except exceptions.NotFound:
+                pass
 
 
 class RbacUtilsMixin(object):
